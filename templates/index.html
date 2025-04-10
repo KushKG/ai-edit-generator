@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Editor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .upload-section {
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .preview {
+            margin-top: 20px;
+            text-align: center;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.3s ease-in-out;
+        }
+        .duration-input {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .duration-input label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        .duration-input input {
+            width: 100px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Video Editor</h1>
+        <p>Upload a video and music to create an AI-powered edit!</p>
+        
+        <form id="uploadForm">
+            <div class="upload-section">
+                <h3>Upload Video</h3>
+                <input type="file" id="video" accept="video/*" required>
+            </div>
+            
+            <div class="upload-section">
+                <h3>Upload Music</h3>
+                <input type="file" id="audio" accept="audio/*" required>
+            </div>
+            
+            <div class="duration-input">
+                <label for="duration">Desired Edit Duration (seconds):</label>
+                <input type="number" id="duration" min="10" max="300" value="60" required>
+            </div>
+            
+            <button type="submit">Create Edit</button>
+        </form>
+        
+        <div id="loading">
+            <p>Processing your video...</p>
+            <div class="progress-bar">
+                <div class="progress" id="progress"></div>
+            </div>
+        </div>
+        
+        <div class="preview" id="preview">
+            <!-- Preview will be shown here -->
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const videoFile = document.getElementById('video').files[0];
+            const audioFile = document.getElementById('audio').files[0];
+            const duration = document.getElementById('duration').value;
+            
+            if (!videoFile || !audioFile) {
+                alert('Please select both video and audio files');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('video', videoFile);
+            formData.append('audio', audioFile);
+            formData.append('duration', duration);
+            
+            // Show loading state
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('preview').innerHTML = '';
+            
+            try {
+                const response = await fetch('/create-edit', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to create edit');
+                }
+                
+                // Create a blob from the response
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                
+                // Display the video
+                document.getElementById('preview').innerHTML = `
+                    <video controls autoplay>
+                        <source src="${url}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                    <p><a href="${url}" download="final_edit.mp4">Download Video</a></p>
+                `;
+                
+            } catch (error) {
+                alert('Error creating edit: ' + error.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html> 
