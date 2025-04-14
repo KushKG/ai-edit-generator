@@ -99,6 +99,11 @@
                 <input type="number" id="duration" min="10" max="300" value="60" required>
             </div>
             
+            <div>
+                <label for="portrait_mode">Portrait Mode:</label>
+                <input type="checkbox" id="portrait_mode" name="portrait_mode">
+            </div>
+            
             <button type="submit">Create Edit</button>
         </form>
         
@@ -121,6 +126,7 @@
             const videoFile = document.getElementById('video').files[0];
             const audioFile = document.getElementById('audio').files[0];
             const duration = document.getElementById('duration').value;
+            const portraitMode = document.getElementById('portrait_mode').checked;
             
             if (!videoFile || !audioFile) {
                 alert('Please select both video and audio files');
@@ -131,6 +137,7 @@
             formData.append('video', videoFile);
             formData.append('audio', audioFile);
             formData.append('duration', duration);
+            formData.append('portrait_mode', portraitMode);
             
             // Show loading state
             document.getElementById('loading').style.display = 'block';

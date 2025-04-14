@@ -16,6 +16,11 @@ import logging
 import traceback
 import whisper
 from transformers import pipeline
+from moviepy.audio.io.AudioFileClip import AudioFileClip
+from moviepy.video.fx.all import resize, crop
+from moviepy.video.VideoClip import ColorClip
+import cv2
+from PIL import Image
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -134,6 +139,81 @@ def generate_prompts_from_lyrics(lyrics):
         logger.error(traceback.format_exc())
         return []
 
+def find_subject_center(frame, processor, model):
+    """Find the center of the subject (player) in the frame using CLIP attention."""
+    # Convert frame to PIL Image if it's numpy array
+    if isinstance(frame, np.ndarray):
+        frame = Image.fromarray(frame)
+    
+    # Get CLIP attention map for "football player"
+    inputs = processor(images=frame, text=["a football player"], return_tensors="pt")
+    outputs = model(**inputs)
+    
+    # Get attention weights
+    attention = outputs.vision_model.pooler_output.detach().numpy()
+    
+    # Convert attention to heatmap
+    heatmap = cv2.resize(attention[0], (frame.size[0], frame.size[1]))
+    
+    # Find the center of mass of the attention
+    y_coords, x_coords = np.where(heatmap > np.mean(heatmap))
+    if len(x_coords) > 0 and len(y_coords) > 0:
+        center_x = int(np.mean(x_coords))
+        center_y = int(np.mean(y_coords))
+    else:
+        # If no clear subject is found, use the center of the frame
+        center_x = frame.size[0] // 2
+        center_y = frame.size[1] // 2
+    
+    return center_x, center_y
+
+def convert_to_portrait(clip, processor=processor, model=model):
+    """Convert a video clip to portrait mode (9:16 aspect ratio) with smart centering"""
+    target_aspect_ratio = 9/16  # Portrait mode aspect ratio
+    
+    def transform_frame(get_frame, t):
+        # Get the current frame
+        frame = get_frame(t)
+        
+        # Find subject center in the current frame
+        center_x, _ = find_subject_center(frame, processor, model)
+        
+        # Get original dimensions
+        h, w = frame.shape[:2]
+        current_aspect_ratio = w/h
+        
+        if current_aspect_ratio > target_aspect_ratio:
+            # Video is too wide, need to crop width
+            new_w = int(h * target_aspect_ratio)
+            
+            # Calculate crop boundaries based on subject center
+            x1 = max(0, min(center_x - new_w//2, w - new_w))
+            x2 = x1 + new_w
+            
+            # Crop the frame
+            cropped_frame = frame[:, x1:x2]
+            return cropped_frame
+        else:
+            # Handle vertical videos similar to before
+            new_h = int(w / target_aspect_ratio)
+            if new_h < h:
+                # Need to crop height
+                y_center = h/2
+                y1 = int(y_center - new_h/2)
+                cropped_frame = frame[y1:y1+new_h, :]
+                return cropped_frame
+            else:
+                # Add black bars for vertical videos
+                final_h = int(w / target_aspect_ratio)
+                result = np.zeros((final_h, w, 3), dtype='uint8')
+                y_offset = (final_h - h) // 2
+                result[y_offset:y_offset+h, :] = frame
+                return result
+    
+    # Create a new clip with the transform applied to each frame
+    new_clip = clip.fl(transform_frame)
+    return new_clip
+
 def analyze_video_clips(video_path, clip_duration=2.0, action_prompts=None, lyrics=None):
     try:
         logger.info(f"Loading video file: {video_path}")
@@ -189,7 +269,7 @@ def analyze_video_clips(video_path, clip_duration=2.0, action_prompts=None, lyri
         logger.error(traceback.format_exc())
         raise
 
-def create_edit(video_path, audio_path, output_path, target_duration=60):
+def create_edit(video_path, audio_path, output_path, target_duration=60, portrait=False):
     try:
         logger.info(f"Starting video edit creation with target duration: {target_duration} seconds")
         
@@ -265,8 +345,11 @@ def create_edit(video_path, audio_path, output_path, target_duration=60):
         # Concatenate clips
         final_video = concatenate_videoclips(selected_clips)
         
-        # Load and trim audio to match video duration
-        audio = VideoFileClip(audio_path).audio
+        if portrait:
+            final_video = convert_to_portrait(final_video)
+        
+        # Load and trim audio using AudioFileClip instead of VideoFileClip
+        audio = AudioFileClip(audio_path)
         if audio.duration > final_video.duration:
             audio = audio.subclip(0, final_video.duration)
         final_video = final_video.set_audio(audio)
@@ -288,7 +371,8 @@ async def read_root(request: Request):
 async def create_video_edit(
     video: UploadFile = File(...),
     audio: UploadFile = File(...),
-    duration: int = Form(60)  # Default to 60 seconds
+    duration: int = Form(60),  # Default to 60 seconds
+    portrait_mode: bool = Form(False)  # New parameter for portrait mode
 ):
     try:
         logger.info(f"Received video and audio files with target duration: {duration} seconds")
@@ -305,8 +389,8 @@ async def create_video_edit(
         with open(audio_path, "wb") as audio_file:
             audio_file.write(await audio.read())
         
-        # Create the edit
-        create_edit(str(video_path), str(audio_path), str(output_path), duration)
+        # Create the edit with portrait mode option
+        create_edit(str(video_path), str(audio_path), str(output_path), duration, portrait_mode)
         
         # Clean up input files
         os.remove(video_path)
