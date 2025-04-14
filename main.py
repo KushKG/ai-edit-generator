@@ -135,7 +135,6 @@ def generate_prompts_from_lyrics(lyrics):
         return []
 
 def analyze_video_clips(video_path, clip_duration=2.0, action_prompts=None, lyrics=None):
-    """Analyze video and extract meaningful clips based on action recognition and lyrics."""
     try:
         logger.info(f"Loading video file: {video_path}")
         video = VideoFileClip(video_path)
@@ -143,55 +142,47 @@ def analyze_video_clips(video_path, clip_duration=2.0, action_prompts=None, lyri
         clips = []
         clip_scores = []
         
-        # Generate prompts from lyrics if available
-        if lyrics:
-            lyric_prompts = generate_prompts_from_lyrics(lyrics)
-            if action_prompts is None:
-                action_prompts = lyric_prompts
-            else:
-                action_prompts.extend(lyric_prompts)
-        
-        # Default action prompts if none provided
+        # Updated default action prompts focused on close-up football plays
         if action_prompts is None:
             action_prompts = [
-                # Positive prompts (close-up shots)
-                "a close-up shot of a football player",
-                "a football player in focus with blurred background",
-                "a tight shot of a football player's face",
-                "a football player filling most of the frame",
-                "a football player in a close-up action shot",
+                # Positive prompts (specific to football highlights)
+                "a close-up of a football player catching a ball",
+                "a football player making an athletic catch",
+                "a tight shot of a football player running with the ball",
+                "a close-up of a football player breaking tackles",
+                "a football player making a spectacular play",
+                "a football receiver running a route",
+                "a close-up of a football player celebrating",
                 
-                # Negative prompts (wide shots with scorebugs)
+                # Negative prompts (what we want to avoid)
                 "a wide shot of a football field",
                 "a football game with scoreboard visible",
-                "a distant view of football players",
-                "a football broadcast with graphics",
-                "a football game with scorebug"
+                "crowd watching football",
+                "football stadium aerial view",
+                "football sideline view"
             ]
         
-        # Extract clips at regular intervals
+        # Increase weight for positive clips and stronger penalty for wide shots
         for start_time in np.arange(0, duration, clip_duration):
             end_time = min(start_time + clip_duration, duration)
-            if end_time - start_time > 0.5:  # Only add clips that are at least 0.5 seconds
+            if end_time - start_time > 0.5:
                 clip = video.subclip(start_time, end_time)
-                # Analyze the clip with CLIP
                 scores = analyze_clip_with_clip(clip, action_prompts)
                 
-                # Split the scores into positive and negative components
-                positive_scores = scores[:5]  # First 5 prompts are positive
-                negative_scores = scores[5:]  # Last 5 prompts are negative
+                # Split scores and adjust weights
+                positive_scores = scores[:7]  # First 7 prompts are positive
+                negative_scores = scores[7:]  # Last 5 prompts are negative
                 
-                # Calculate mean scores
-                positive_mean = np.mean(positive_scores)
+                # Increased weight for positive scores
+                positive_mean = np.mean(positive_scores) * 1.5
                 negative_mean = np.mean(negative_scores)
                 
-                # Final score gives more weight to close-ups and penalizes wide shots
-                final_score = positive_mean - (negative_mean * 0.5)
+                # Stronger penalty for wide shots
+                final_score = positive_mean - (negative_mean * 0.8)
                 
                 clips.append(clip)
                 clip_scores.append(final_score)
-        
-        logger.info(f"Extracted {len(clips)} clips from video")
+
         return clips, clip_scores
     except Exception as e:
         logger.error(f"Error in analyze_video_clips: {str(e)}")
@@ -199,45 +190,58 @@ def analyze_video_clips(video_path, clip_duration=2.0, action_prompts=None, lyri
         raise
 
 def create_edit(video_path, audio_path, output_path, target_duration=60):
-    """Create the final edited video with specified duration."""
     try:
         logger.info(f"Starting video edit creation with target duration: {target_duration} seconds")
         
-        # Extract lyrics from the audio
-        lyrics = extract_lyrics(audio_path)
-        
-        # Detect beats and get tempo
+        # Get beat times first
         beat_times, tempo = detect_beats(audio_path)
         
-        # Adjust clip duration based on tempo
-        base_clip_duration = 2.0
-        tempo_factor = 120 / tempo  # Normalize to 120 BPM
+        # Adjust clip duration to be shorter for more dynamic editing
+        base_clip_duration = 1.5  # Reduced from 2.0 for more dynamic cuts
+        tempo_factor = 120 / tempo
         clip_duration = base_clip_duration * tempo_factor
         
-        # Analyze video and get clip scores, including lyric-based prompts
-        video_clips, clip_scores = analyze_video_clips(video_path, clip_duration, lyrics=lyrics)
+        # Analyze video and get clips
+        video_clips, clip_scores = analyze_video_clips(video_path, clip_duration)
         
         if not video_clips:
             raise ValueError("No valid clips could be extracted from the video")
         
-        # Sort clips by their action scores
-        sorted_indices = np.argsort(clip_scores)[::-1]  # Descending order
+        # Sort clips by score
+        sorted_indices = np.argsort(clip_scores)[::-1]
         sorted_clips = [video_clips[i] for i in sorted_indices]
+        
+        # Select clips and align them with beats
+        selected_clips = []
+        current_time = 0
+        beat_index = 0
+        
+        while current_time < target_duration and beat_index < len(beat_times):
+            # Find next beat time
+            next_beat = beat_times[beat_index]
+            
+            # Find a suitable clip
+            for i, clip in enumerate(sorted_clips):
+                if clip.duration <= (target_duration - current_time):
+                    clip = clip.without_audio()
+                    selected_clips.append(clip)
+                    current_time += clip.duration
+                    sorted_clips.pop(i)
+                    break
+            
+            beat_index += 1
         
         # Calculate how many clips we need to reach target duration
         current_duration = 0
-        selected_clips = []
         used_indices = set()
         
-        # First pass: select the best clips until we reach target duration
-        for i in range(len(sorted_clips)):
+        # Second pass: select the best clips until we reach target duration
+        for i in range(len(selected_clips)):
             if current_duration >= target_duration:
                 break
             if i not in used_indices:
-                clip = sorted_clips[i]
-                # Mute the original audio from the clip
-                clip = clip.without_audio()
-                selected_clips.append(clip)
+                clip = selected_clips[i]
+                selected_clips[i] = clip.without_audio()
                 used_indices.add(i)
                 current_duration += clip.duration
         
@@ -245,13 +249,11 @@ def create_edit(video_path, audio_path, output_path, target_duration=60):
         if current_duration < target_duration:
             remaining_duration = target_duration - current_duration
             # Try to find clips that fit the remaining duration
-            for i in range(len(sorted_clips)):
+            for i in range(len(selected_clips)):
                 if i not in used_indices:
-                    clip = sorted_clips[i]
+                    clip = selected_clips[i]
                     if clip.duration <= remaining_duration:
-                        # Mute the original audio from the clip
-                        clip = clip.without_audio()
-                        selected_clips.append(clip)
+                        selected_clips[i] = clip.without_audio()
                         used_indices.add(i)
                         current_duration += clip.duration
                         remaining_duration = target_duration - current_duration
